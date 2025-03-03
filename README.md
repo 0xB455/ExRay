@@ -39,7 +39,7 @@
    - **Python 3** is required.  
    - Install needed libraries (such as `requests`):  
      ```bash
-     pip install requests
+     pip install -r requirements.txt
      ```
 
 3. **Run the Script**  
