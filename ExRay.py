@@ -3,9 +3,10 @@
 ExRay - Exchange enumerator w/ domain brute force, DNS concurrency, HTTP concurrency, & wildcard detection. (v1.0)
  - Distinguishes between --dns-threads (DNS concurrency) and --http-threads (HTTP concurrency).
  - Enhances wildcard detection: even if the majority are "wildcard" codes, outlier endpoints get listed.
+ - Detects and records O365 endpoints, reporting them in final output and in the JSON dump.
  - Produces two output files if -o is given:
    1) <output>.txt  -> Plain line-based results
-   2) <output>.json -> Structured JSON summary
+   2) <output>.json -> Structured JSON summary including O365-detected hosts.
 """
 
 import argparse
@@ -233,7 +234,6 @@ OWA_EXCHANGE_VERSION_MAP = {
     "15.2.330.5":    "Exchange 2019 CU1",
     "15.2.397.3":    "Exchange 2019 CU2",
     "15.2.922.13":   "Exchange 2019 CU7 (approx)",
-    # etc...
 }
 
 def map_owa_version(owa_version_str):
@@ -290,6 +290,9 @@ extracted_info = {
     "hosts": {},  # host -> { "headers": [...], "ntlm_domains": set(), "basic_http_exposed": bool }
 }
 
+# New: Global set for O365 detected hosts
+o365_detected = set()
+
 # ---------------------------------------------------------------------
 # 8. PATH ENUMERATION + HEADER ANALYSIS (With Threading)
 # ---------------------------------------------------------------------
@@ -302,17 +305,14 @@ def check_paths(target, paths, timeout=10, do_auth=True, http_threads=5):
       - detect if Basic auth is offered over plain HTTP
     Returns a list of (path, status_code, headers_dict, ntlm_info, basic_http_exposed)
     """
-
     def worker(p):
-        """A single path-checking function run in a thread."""
         full_url = target.rstrip("/") + p
         scheme, _, _ = extract_host_port(full_url)
         try:
             r = requests.get(full_url, verify=False, timeout=timeout)
             sc = r.status_code
-            headers_lower = {k.lower(): v for k,v in r.headers.items()}
+            headers_lower = {k.lower(): v for k, v in r.headers.items()}
 
-            # Gather interesting headers
             found_headers = {}
             for h in INTERESTING_HEADERS:
                 h_lower = h.lower()
@@ -322,15 +322,12 @@ def check_paths(target, paths, timeout=10, do_auth=True, http_threads=5):
             ntlm_info = {}
             basic_http_exposed = False
 
-            # Check for WWW-Authenticate
             if "www-authenticate" in headers_lower:
-                # requests merges repeated headers with commas
                 auth_parts = [x.strip() for x in headers_lower["www-authenticate"].split(",")]
                 possible_lines = []
                 for idx, val in enumerate(auth_parts):
                     upval = val.upper()
                     if upval.startswith("NTLM") or upval.startswith("BASIC") or upval.startswith("NEGOTIATE"):
-                        # Combine with next if it's pure base64
                         if idx+1 < len(auth_parts) and re.match(r'^[A-Za-z0-9+/=]+$', auth_parts[idx+1]):
                             possible_lines.append(val + " " + auth_parts[idx+1])
                         else:
@@ -338,12 +335,10 @@ def check_paths(target, paths, timeout=10, do_auth=True, http_threads=5):
                     else:
                         possible_lines.append(val)
 
-                # Basic over plain HTTP?
                 for line in possible_lines:
                     if line.upper().startswith("BASIC") and scheme == "http":
                         basic_http_exposed = True
 
-                # NTLM handshake?
                 ntlm_present = any(line.upper().startswith("NTLM") for line in possible_lines)
                 if ntlm_present and do_auth:
                     type1_msg = "TlRMTVNTUAABAAAAB4IIAAAAAAAAAAAAAAAAAAAAAAA="
@@ -359,18 +354,15 @@ def check_paths(target, paths, timeout=10, do_auth=True, http_threads=5):
                             ntlm_info.update(parsed)
 
             return (p, sc, found_headers, ntlm_info, basic_http_exposed)
-
         except requests.exceptions.RequestException as e:
             return (p, f"ERROR: {str(e)}", {}, {}, False)
 
     results = []
-    # We'll use a ThreadPoolExecutor for concurrency
     with concurrent.futures.ThreadPoolExecutor(max_workers=http_threads) as executor:
         future_map = {executor.submit(worker, p): p for p in paths}
         for future in concurrent.futures.as_completed(future_map):
             res = future.result()
             results.append(res)
-
     return results
 
 # ---------------------------------------------------------------------
@@ -386,22 +378,22 @@ def chunk_list(items, n=4):
 # ---------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="ExRay Web - Exchange enumerator w/ domain brute force, DNS concurrency, HTTP concurrency, & wildcard detection. (v2.6)"
+        description="ExRay Web - Exchange enumerator with domain brute force, DNS concurrency, HTTP concurrency, wildcard detection, and O365 reporting. (v2.7)"
     )
-    parser.add_argument("-t","--target", help="Single target, e.g. 'mail.example.com'.")
-    parser.add_argument("-l","--list",   help="File with one target per line.")
-    parser.add_argument("--domain",      help="Brute force subdomains for e.g. 'target.com'.")
+    parser.add_argument("-t", "--target", help="Single target, e.g. 'mail.example.com'.")
+    parser.add_argument("-l", "--list", help="File with one target per line.")
+    parser.add_argument("--domain", help="Brute force subdomains for e.g. 'target.com'.")
     parser.add_argument("--dns-threads", type=int, default=100,
                         help="Number of parallel DNS lookups (default=100).")
     parser.add_argument("--http-threads", type=int, default=5,
                         help="Number of parallel HTTP requests (per target) for path enumeration (default=5).")
-    parser.add_argument("--http-only","-H",action="store_true", help="Only check http://")
-    parser.add_argument("--https-only","-S",action="store_true",help="Only check https://")
-    parser.add_argument("--no-preflight",action="store_true",
+    parser.add_argument("--http-only", "-H", action="store_true", help="Only check http://")
+    parser.add_argument("--https-only", "-S", action="store_true", help="Only check https://")
+    parser.add_argument("--no-preflight", action="store_true",
                         help="Skip port check (requires --http-only or --https-only).")
-    parser.add_argument("--no-auth",action="store_true",
+    parser.add_argument("--no-auth", action="store_true",
                         help="Do NOT attempt dummy NTLM authentication if server responds with NTLM.")
-    parser.add_argument("-o","--output", help="Base filename for output (without file extension).")
+    parser.add_argument("-o", "--output", help="Base filename for output (without file extension).")
     args = parser.parse_args()
 
     if not (args.target or args.list or args.domain):
@@ -421,11 +413,11 @@ def main():
         exp = parse_target(args.target, args.http_only, args.https_only)
         final_targets.update(exp)
 
-    # (B) List of targets
+    # (B) Multiple targets from file
     if args.list:
         lines = []
         try:
-            with open(args.list,"r",encoding="utf-8") as f:
+            with open(args.list, "r", encoding="utf-8") as f:
                 lines = [x.strip() for x in f if x.strip()]
         except Exception as e:
             print(f"[!] Error reading target list file: {e}")
@@ -436,7 +428,7 @@ def main():
         print(f'[+] Loaded {len(lines)} raw target(s) from "{args.list}".')
 
     # -----------------------------------------------------------------
-    # (C) Domain-based subdomain brute force W/ PARALLEL DNS
+    # (C) Domain-based subdomain brute force with parallel DNS
     # -----------------------------------------------------------------
     discovered_targets = set()
     if args.domain:
@@ -445,25 +437,26 @@ def main():
         subs = generate_subdomain_variants()
         subdomains = [f"{s}.{domain}" for s in subs]
         total_subs = len(subdomains)
-        progress_points = {10,20,30,40,50,60,70,80,90}
+        progress_points = {10, 20, 30, 40, 50, 60, 70, 80, 90}
 
         fqdn_to_ips = {}
         max_dns_threads = args.dns_threads
         print(f"[!] DNS concurrency: using {max_dns_threads} parallel DNS threads.")
 
+        # New: Set for O365 detected hosts
+        global o365_detected
+        o365_detected = set()
+
         completed_count = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_dns_threads) as executor:
-            future_to_fqdn = {
-                executor.submit(dns_resolve_all, fqdn): fqdn for fqdn in subdomains
-            }
+            future_to_fqdn = {executor.submit(dns_resolve_all, fqdn): fqdn for fqdn in subdomains}
             for future in concurrent.futures.as_completed(future_to_fqdn):
                 completed_count += 1
                 fqdn = future_to_fqdn[future]
-                pct = int((completed_count/total_subs)*100)
+                pct = int((completed_count / total_subs) * 100)
                 if pct in progress_points:
                     print(f"  ... {pct}% of subdomain brute force completed.")
                     progress_points.remove(pct)
-
                 iplist = future.result()
                 fqdn_to_ips[fqdn] = iplist
 
@@ -472,7 +465,7 @@ def main():
             if not iplist:
                 continue  # no IPs => skip
 
-            # Check if subdomain is O365
+            # Check if subdomain is O365; if so, record it and skip further processing
             sub_urls = parse_target(fqdn, args.http_only, args.https_only)
             is_sub_o365 = False
             for surl in sub_urls:
@@ -480,6 +473,7 @@ def main():
                 if is_o365_redirect(shost, scheme=ssch):
                     print(f"  [O365 detected] {fqdn} => skipping subdomain + IPs.")
                     is_sub_o365 = True
+                    o365_detected.add(fqdn)
                     break
             if is_sub_o365:
                 continue
@@ -497,12 +491,12 @@ def main():
                     if is_o365_redirect(iu_host, scheme=iu_sch):
                         print(f"  [O365 detected] {ip} => skipping IP.")
                         skip_ip = True
+                        o365_detected.add(ip)
                         break
                 if not skip_ip:
                     for iurl in ip_urls:
                         final_targets.add(iurl)
                         discovered_targets.add(iurl)
-
             print(f"  Found {fqdn} -> {iplist}")
 
         print(f"[+] Subdomain brute force complete, discovered {discovered_count} subdomain(s) that resolved.")
@@ -512,28 +506,26 @@ def main():
     # -----------------------------------------------------------------
     unique_targets = sorted(final_targets)
     print(f"\n[+] After expansion/deduplication, we have {len(unique_targets)} total endpoint(s) to check.\n")
-
     if args.domain and discovered_targets:
         print("=== Discovered Targets from Subdomain Brute Force ===")
         for d in sorted(discovered_targets):
             print(f"  {d}")
         print()
 
-    # Separate out HTTP vs HTTPS
+    # Separate HTTP vs HTTPS targets
     http_list = []
     https_list = []
     for ut in unique_targets:
-        sch, ho, po = extract_host_port(ut)
+        sch, _, _ = extract_host_port(ut)
         if sch == "http":
             http_list.append(ut)
         else:
             https_list.append(ut)
 
-    # Preflight checks
+    # Preflight checks (if not skipped)
     if not args.no_preflight:
         print("Performing preflight checks (TCP port open)...")
         open_http, open_https = [], []
-
         for h_t in http_list:
             _, ho, po = extract_host_port(h_t)
             if check_port_open(ho, po, 2):
@@ -542,12 +534,10 @@ def main():
             _, ho, po = extract_host_port(h_s)
             if check_port_open(ho, po, 2):
                 open_https.append(h_s)
-
         print(f"  Total HTTP endpoints to test: {len(http_list)}")
         print(f"  Total HTTPS endpoints to test: {len(https_list)}")
         print(f"  Hosts listening on HTTP: {len(open_http)}")
         print(f"  Hosts listening on HTTPS: {len(open_https)}")
-
         print("\nNow checking each opened port for web services...\n")
         to_scan = open_http + open_https
     else:
@@ -557,39 +547,26 @@ def main():
     per_target_summary = {}
     output_data = []
 
-    # SCAN
+    # SCAN each target
     for tgt in to_scan:
         print(f"=== Checking target: {tgt} ===")
         do_auth = not args.no_auth
         results = check_paths(tgt, EXCHANGE_PATHS, timeout=10, do_auth=do_auth, http_threads=args.http_threads)
         per_target_summary[tgt] = results
-
         for (path, code, found_headers, ntlm_info, basic_http_exposed) in results:
             print(f" {path} -> {code}")
-            cstr = str(code) if isinstance(code,int) else code
-            # This line goes to the plain text output later
+            cstr = str(code) if isinstance(code, int) else code
             output_data.append(f"{tgt} | {path} | {cstr}")
-
-            # Store in extracted_info
             if tgt not in extracted_info["hosts"]:
-                extracted_info["hosts"][tgt] = {
-                    "headers": [],
-                    "ntlm_domains": set(),
-                    "basic_http_exposed": False,
-                }
-
+                extracted_info["hosts"][tgt] = {"headers": [], "ntlm_domains": set(), "basic_http_exposed": False}
             if found_headers:
                 extracted_info["hosts"][tgt]["headers"].append(found_headers)
-
             if ntlm_info.get("ntlm_domain"):
                 extracted_info["hosts"][tgt]["ntlm_domains"].add(ntlm_info["ntlm_domain"])
-
             if basic_http_exposed:
                 extracted_info["hosts"][tgt]["basic_http_exposed"] = True
-
         print()
 
-    # Skipped hosts
     skipped = set(unique_targets) - set(to_scan)
     if skipped:
         print("=== Skipped Targets (Due to closed ports or other reason) ===")
@@ -598,48 +575,31 @@ def main():
         print()
 
     # -----------------------------------------------------------------
-    # 10. Final Summaries w/ wildcard detection
+    # Final Summary: Per-Target Endpoints and Wildcard Detection
     # -----------------------------------------------------------------
     all_valid_endpoints = []
     wildcard_threshold = 0.80
-
-    print("\n=== Per-Target Summary of Identified (Potentially Valid) Endpoints ===")
     interesting_codes = [200, 301, 302, 401, 403]
 
+    print("\n=== Per-Target Summary of Identified (Potentially Valid) Endpoints ===")
     for tgt in sorted(per_target_summary.keys()):
         results = per_target_summary[tgt]
         if not results:
             print(f"\nTarget: {tgt}\n  No results (empty?).")
             continue
-
-        # Gather only integer codes
-        int_codes = [c for (_, c, _, _, _) in results if isinstance(c,int)]
+        int_codes = [c for (_, c, _, _, _) in results if isinstance(c, int)]
         if not int_codes:
             print(f"\nTarget: {tgt}\n  No valid HTTP codes (all errors?).")
             continue
-
         c = Counter(int_codes)
-        (most_common_code, cnt_most_common) = c.most_common(1)[0]
+        most_common_code, cnt_most_common = c.most_common(1)[0]
         total_count = len(int_codes)
-
         ratio = cnt_most_common / total_count
+        print(f"\nTarget: {tgt}")
         if ratio >= wildcard_threshold:
             pct_str = round(ratio * 100, 2)
-            print(f"\nTarget: {tgt}")
-            print(f"  => {cnt_most_common} of {total_count} probed paths responded with HTTP {most_common_code} "
-                  f"({pct_str}%). Possible wildcard/catch-all behavior.\n")
-
-            # We still look for "outliers" that differ from the most common code
-            # and are one of the interesting codes
-            outliers = [
-                (p, code)
-                for (p, code, _, _, _) in results
-                if (
-                    isinstance(code, int)
-                    and code != most_common_code
-                    and code in interesting_codes
-                )
-            ]
+            print(f"  => {cnt_most_common} of {total_count} probed paths responded with HTTP {most_common_code} ({pct_str}%). Possible wildcard/catch-all behavior.")
+            outliers = [(p, code) for (p, code, _, _, _) in results if isinstance(code, int) and code != most_common_code and code in interesting_codes]
             if outliers:
                 print("  However, these path(s) returned a different interesting code:")
                 for (p, code) in outliers:
@@ -648,15 +608,12 @@ def main():
             else:
                 print("  No outlier paths returned a different interesting code.")
         else:
-            # Normal enumeration if not flagged as wildcard
-            print(f"\nTarget: {tgt}")
             any_found = False
             for (path, code, _, _, _) in results:
                 if isinstance(code, int) and code in interesting_codes:
                     print(f"  Found: {path} (HTTP {code})")
                     all_valid_endpoints.append((tgt, path, code))
                     any_found = True
-
             if not any_found:
                 print("  No interesting endpoints discovered (or all were different codes).")
 
@@ -668,39 +625,27 @@ def main():
         print("  No potentially valid endpoints found across all targets.")
 
     # -----------------------------------------------------------------
-    # 11. Consolidated Summary of Headers & NTLM Info
+    # Consolidated Summary: Headers, NTLM Domains, Basic Auth & O365 Detection
     # -----------------------------------------------------------------
-    print("\n=== Consolidated Summary of Discovered Header Values, NTLM Domains, and Basic HTTP Exposure ===")
-
-    # We'll build structures to unify data across all hosts:
-    # (A) For each header, track { header_value : set(hosts) }
+    print("\n=== Consolidated Summary of Discovered Header Values, NTLM Domains, Basic HTTP Exposure, and O365 Detection ===")
     header_presence = defaultdict(lambda: defaultdict(set))
-    # (B) For each NTLM domain, track set(hosts)
     ntlm_presence = defaultdict(set)
-    # (C) For basic HTTP warnings
     basic_http_hosts = set()
 
     for tgt, info in extracted_info["hosts"].items():
-        # Basic HTTP?
         if info["basic_http_exposed"]:
             basic_http_hosts.add(tgt)
-
-        # Headers
         for hdr_dict in info["headers"]:
             for hdr_name, hdr_val in hdr_dict.items():
-                # If this is X-OWA-Version, we can map it
                 if hdr_name.lower() == "x-owa-version":
                     mapped = map_owa_version(hdr_val)
                     if mapped:
                         hdr_val = f"{hdr_val} (Mapped: {mapped})"
                 header_presence[hdr_name][hdr_val].add(tgt)
-
-        # NTLM domains
         for dmn in info["ntlm_domains"]:
             if dmn.strip():
                 ntlm_presence[dmn].add(tgt)
 
-    # (A) Print each header -> each value -> which hosts (chunked 4 per line)
     if header_presence:
         print("\n--- Headers Found Across All Hosts ---")
         for hdr_name in sorted(header_presence.keys()):
@@ -714,7 +659,6 @@ def main():
     else:
         print("\nNo interesting headers discovered across any hosts.")
 
-    # (B) Print NTLM domains
     if ntlm_presence:
         print("\n--- NTLM Domains Discovered (Type2 Challenge) ---")
         for dmn, hosts_set in ntlm_presence.items():
@@ -726,7 +670,6 @@ def main():
     else:
         print("\nNo NTLM domains discovered.")
 
-    # (C) Print Basic over HTTP
     if basic_http_hosts:
         print("\n--- Hosts Offering BASIC Auth Over Plain HTTP (Insecure) ---")
         for chunk in chunk_list(sorted(basic_http_hosts), 4):
@@ -734,16 +677,23 @@ def main():
     else:
         print("\nNo hosts were found offering Basic auth over plain HTTP.")
 
-    print("\nDone. (v2.6)\n")
+    if o365_detected:
+        print("\n--- O365 Detected Hosts ---")
+        o365_list = sorted(o365_detected)
+        print(f"  Detected on {len(o365_list)} host{'s' if len(o365_list)>1 else ''}:")
+        for chunk in chunk_list(o365_list, 4):
+            print("  " + ", ".join(chunk))
+    else:
+        print("\nNo O365 hosts detected.")
+
+    print("\nDone. (v2.7)\n")
 
     # -----------------------------------------------------------------
-    # 12. Write Output (if requested)
+    # Write Output Files (if requested)
     # -----------------------------------------------------------------
     if args.output:
         text_filename = f"{args.output}.txt"
         json_filename = f"{args.output}.json"
-
-        # 12a. Plain text lines (per-path) -> <output>.txt
         try:
             with open(text_filename, "w", encoding="utf-8") as out_f:
                 for line in output_data:
@@ -751,57 +701,31 @@ def main():
             print(f"[+] Plain results written to: {text_filename}")
         except Exception as e:
             print(f"[!] Error writing to {text_filename}: {e}")
-
-        # 12b. Structured JSON -> <output>.json
-        # Build the JSON structure:
-
-        # valid_endpoints
         valid_endpoints_list = []
         for (tgt, path, code) in all_valid_endpoints:
-            valid_endpoints_list.append({
-                "target": tgt,
-                "path": path,
-                "code": code
-            })
-
-        # headers => list of {header, value, count, hosts[]}
-        header_list = []
+            valid_endpoints_list.append({"target": tgt, "path": path, "code": code})
+        headers_list = []
         for hdr_name in sorted(header_presence.keys()):
             for val, hosts_set in header_presence[hdr_name].items():
-                header_list.append({
-                    "header": hdr_name,
-                    "value": val,
-                    "count": len(hosts_set),
-                    "hosts": sorted(hosts_set),
-                })
-
-        # ntlm_domains => list of {domain, count, hosts[]}
+                headers_list.append({"header": hdr_name, "value": val, "count": len(hosts_set), "hosts": sorted(hosts_set)})
         ntlm_list = []
         for dmn, hosts_set in ntlm_presence.items():
-            ntlm_list.append({
-                "domain": dmn,
-                "count": len(hosts_set),
-                "hosts": sorted(hosts_set),
-            })
-
-        # basic_http_exposure => just a list of hosts
+            ntlm_list.append({"domain": dmn, "count": len(hosts_set), "hosts": sorted(hosts_set)})
         basic_http_exposed_list = sorted(basic_http_hosts)
-
-        # Final JSON object
+        o365_detected_list = sorted(o365_detected)
         json_data = {
             "valid_endpoints": valid_endpoints_list,
-            "headers": header_list,
+            "headers": headers_list,
             "ntlm_domains": ntlm_list,
             "basic_http_exposure": basic_http_exposed_list,
+            "o365_detected": o365_detected_list
         }
-
         try:
             with open(json_filename, "w", encoding="utf-8") as out_f:
                 json.dump(json_data, out_f, indent=2)
             print(f"[+] JSON summary written to: {json_filename}")
         except Exception as e:
             print(f"[!] Error writing to {json_filename}: {e}")
-
 
 if __name__ == "__main__":
     main()
