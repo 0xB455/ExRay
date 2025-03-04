@@ -248,9 +248,9 @@ def main():
     if args.domain:
         domain = args.domain.strip()
         print(f"\n[+] Performing subdomain brute force for domain: {domain}")
-        print("[!] NOTE: With sub-50 ms or sub-10 ms DNS lookups + rapid NXDOMAIN, "
+        print("[!] NOTE: With one single thread and sub-50 ms or sub-10 ms DNS lookups + rapid NXDOMAIN, "
               "this might complete in ~3 min; otherwise 5–15+ min.\n")
-
+        
         subs = generate_subdomain_variants()
         subdomains = [f"{s}.{domain}" for s in subs]
         total_subs = len(subdomains)
@@ -263,6 +263,8 @@ def main():
         import concurrent.futures
         max_threads = args.dns_threads  # e.g. default=100, or user override
         completed_count = 0
+
+        print(f"[!] NOTE: Speeding up with {max_threads} parallel threads. Reduce concurrent threads if you run into errors.\n")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
             future_to_fqdn = {
