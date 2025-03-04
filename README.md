@@ -1,7 +1,3 @@
-Below is an **updated** `README.md` reflecting the **new** features and enhancements introduced in your latest ExRay version – including **NTLM attempts**, **basic auth over HTTP detection**, **OWA version mapping**, **parallel HTTP requests**, **split DNS/HTTP concurrency**, **JSON output**, and **refined wildcard handling**.
-
----
-
 # ExRay v1.0 – A Comprehensive Exchange Web Enumeration Script
 
 **ExRay** is a Python-based tool for discovering and enumerating Microsoft Exchange endpoints (on-premise, hybrid, or partially migrated). It uses subdomain brute forcing, parallel DNS resolution, parallel HTTP requests, port preflight checks, NTLM handshake attempts, and wildcard detection to provide thorough coverage of Exchange services.
