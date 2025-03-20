@@ -378,7 +378,7 @@ def chunk_list(items, n=4):
 # ---------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="ExRay Web - Exchange enumerator with domain brute force, DNS concurrency, HTTP concurrency, wildcard detection, and O365 reporting. (v2.7)"
+        description="ExRay Web - Exchange enumerator with domain brute force, DNS concurrency, HTTP concurrency, wildcard detection, and O365 reporting. (v1.0)"
     )
     parser.add_argument("-t", "--target", help="Single target, e.g. 'mail.example.com'.")
     parser.add_argument("-l", "--list", help="File with one target per line.")
@@ -686,7 +686,7 @@ def main():
     else:
         print("\nNo O365 hosts detected.")
 
-    print("\nDone. (v2.7)\n")
+    print("\nDone. (v1.0)\n")
 
     # -----------------------------------------------------------------
     # Write Output Files (if requested)
