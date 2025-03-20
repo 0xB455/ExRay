@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ExRay - Exchange enumerator w/ domain brute force, DNS concurrency, HTTP concurrency, & wildcard detection. (v1.0)
+ExRay - Exchange enumerator w/ domain brute force, DNS concurrency, HTTP concurrency, & wildcard detection.
  - Distinguishes between --dns-threads (DNS concurrency) and --http-threads (HTTP concurrency).
  - Enhances wildcard detection: even if the majority are "wildcard" codes, outlier endpoints get listed.
  - Detects and records O365 endpoints, reporting them in final output and in the JSON dump.
@@ -8,7 +8,8 @@ ExRay - Exchange enumerator w/ domain brute force, DNS concurrency, HTTP concurr
    1) <output>.txt  -> Plain line-based results
    2) <output>.json -> Structured JSON summary including O365-detected hosts.
 """
-
+VERSION = "1.0"
+__version__ = VERSION
 import argparse
 import requests
 import sys
@@ -378,7 +379,7 @@ def chunk_list(items, n=4):
 # ---------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="ExRay Web - Exchange enumerator with domain brute force, DNS concurrency, HTTP concurrency, wildcard detection, and O365 reporting. (v1.0)"
+        description=f"ExRay Web (v{VERSION}) - Exchange enumerator with domain brute force, DNS concurrency, HTTP concurrency, wildcard detection, and O365 reporting. (v{VERSION})"
     )
     parser.add_argument("-t", "--target", help="Single target, e.g. 'mail.example.com'.")
     parser.add_argument("-l", "--list", help="File with one target per line.")
@@ -686,7 +687,7 @@ def main():
     else:
         print("\nNo O365 hosts detected.")
 
-    print("\nDone. (v1.0)\n")
+    print(f"\nDone. (v{VERSION})\n")
 
     # -----------------------------------------------------------------
     # Write Output Files (if requested)
