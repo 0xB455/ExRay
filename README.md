@@ -2,6 +2,11 @@
 
 **ExRay** is a Python-based tool for discovering and enumerating Microsoft Exchange endpoints (on-premise, hybrid, or partially migrated). It uses subdomain brute forcing, parallel DNS resolution, parallel HTTP requests, port preflight checks, NTLM handshake attempts, and wildcard detection to provide thorough coverage of Exchange services.
 
+It was created out of the need that I noticed that for me many old legacy exchange testing tools missed too much stuff... especially in scenarios where an exchange environment was partially decomissioned or "hardened".
+So I wanted something that can properly map and identify remnants of the exchange stuff that I have been checking and abusing for decades. Quite crazy that something like this added value for me in the year 2025...
+
+It got some quality of life features but is far from super user friendly... it mostly gives me what I need for pentesting/red teaming activities... any way: feel free to raise issues or pull requests
+
 ---
 
 ## Features
