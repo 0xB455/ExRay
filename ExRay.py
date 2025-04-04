@@ -8,6 +8,7 @@ ExRay - Exchange enumerator w/ domain brute force, DNS concurrency, HTTP concurr
    1) <output>.txt  -> Plain line-based results
    2) <output>.json -> Structured JSON summary including O365-detected hosts.
 """
+
 VERSION = "1.0"
 __version__ = VERSION
 import argparse
